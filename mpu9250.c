@@ -31,6 +31,6 @@ module_exit(helloworld_exit);
 /*
  * Seccion sobre Informacion del modulo
  */
-MODULE_AUTHOR("Gonzalo E. Sanchez <gonzalo.e.sds@gmail.com>");
+MODULE_AUTHOR("Alejandro Permingeat <apermingeat@gmail.com>");
 MODULE_LICENSE("GPL");
-MODULE_INFO(mse_imd, "Esto no es para simples mortales");
+MODULE_INFO(mse_imd, "Modulo para el manejo de la IMU MPU9250");
