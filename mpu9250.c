@@ -8,11 +8,18 @@
 #include <linux/regmap.h>
 
 #include <linux/delay.h>
+#include <linux/uaccess.h>
 
 #include "mpu9250.h"
 
 /*Se define un major number arbitrario (estoy inventando) */
 #define MY_MAJOR_NUM 202
+
+#define MPU9250_MAX_DATA_SIZE_16BITS	10 /* x,y,z for acc, gyro, mag + temp*/
+#define MPU9250_ACC_DATA_START		0 
+#define MPU9250_GYRO_DATA_START		3
+#define MPU9250_MAG_DATA_START		6
+#define MPU9250_TEMP_DATA_START		9
 
 /* Definicion de estructura cdev que representa internamente un chardevice  */
 static struct cdev my_dev;
@@ -26,6 +33,11 @@ static u8 Gscale = GFS_250DPS;
 static u8 Ascale = AFS_2G;
 static u8 Mscale = MFS_16BITS;
 static u8 Mmode = M_100HZ;
+
+static void readAccelData(int16_t * destination);
+static void readGyroData(int16_t * destination);
+static void readMagData(int16_t * destination);
+static int16_t readTempData(void);
 
 /*********************************************************************************
  * Definiciones de funciones sobre archivos y estructura correspondiente
@@ -47,12 +59,30 @@ static long my_dev_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	return 0;
 }
 
+static ssize_t my_dev_read(struct file *filep, char __user *buffer, size_t len, loff_t *offset)  {
+	int16_t sensorData[MPU9250_MAX_DATA_SIZE_16BITS];
+	memset(sensorData,0,MPU9250_MAX_DATA_SIZE_16BITS*2);
+	readAccelData(&sensorData[MPU9250_ACC_DATA_START]);
+	readGyroData(&sensorData[MPU9250_GYRO_DATA_START]);
+	readMagData(&sensorData[MPU9250_MAG_DATA_START]);
+	sensorData[MPU9250_TEMP_DATA_START] = readTempData();
+
+	if((MPU9250_MAX_DATA_SIZE_16BITS*2) < len)
+		len = MPU9250_MAX_DATA_SIZE_16BITS*2;
+
+	if (copy_to_user(buffer,sensorData, len))
+        	return -EFAULT;
+	
+	return len;
+}
+
 /* declaracion de una estructura del tipo file_operations */
 
 static const struct file_operations my_dev_fops = {
 	.owner = THIS_MODULE,
 	.open = my_dev_open,
 	.release = my_dev_close,
+	.read = my_dev_read,
 	.unlocked_ioctl = my_dev_ioctl,
 };
 
@@ -150,7 +180,7 @@ static int mpu9250_isAlive(struct i2c_client *client)
  */
 static int mpu9250_accel_gyro_init(struct i2c_client *client)
 {
-	float gBias[3], aBias[3];
+	//float gBias[3], aBias[3];
 	u8 c;
 
 	int ret = mpu9250_isAlive(client);
@@ -249,25 +279,120 @@ static int mpu9250_accel_gyro_init(struct i2c_client *client)
  */
 static int mpu9250_mag_init(struct i2c_client *client)
 {
-    //  Initialization uses I2C channel number 4 for writing data
+	int ret = mpu9250_isAlive(client);
 
-    //  Configure master I2C clock (400kHz) for MPU to talk to slaves
-    mpu9250_write(client,  I2C_MST_CTRL, 0x5D);
-    //  Enable I2C master
-    mpu9250_write(client,  USER_CTRL, 0x20);
+	if (ret < 0)
+		return ret;
 
-    //  Stop I2C slave number 4
-    mpu9250_write(client,  I2C_SLV4_CTRL, 0x00);
-    //  Set address for I2C4 slave to that of AK8963, writing mode (MSB=0)
-    mpu9250_write(client,  I2C_SLV4_ADDR, AK8963_ADDRESS);
-    //  Select which register is being updated
-    mpu9250_write(client,  I2C_SLV4_REG, AK8963_CNTL);
-    // Set value to write into the register:
-    //      16-bit continuous measurements @ 100Hz
-    mpu9250_write(client,  I2C_SLV4_DO, Mscale << 4 | Mmode);
-    // Trigger write data to slave device 4 -> AK8963
-    mpu9250_write(client,  I2C_SLV4_CTRL, 0x80);
-    msleep(5);
+	//  Initialization uses I2C channel number 4 for writing data
+
+	//  Configure master I2C clock (400kHz) for MPU to talk to slaves
+	mpu9250_write(client,  I2C_MST_CTRL, 0x5D);
+	//  Enable I2C master
+	mpu9250_write(client,  USER_CTRL, 0x20);
+
+	//  Stop I2C slave number 4
+	mpu9250_write(client,  I2C_SLV4_CTRL, 0x00);
+	//  Set address for I2C4 slave to that of AK8963, writing mode (MSB=0)
+	mpu9250_write(client,  I2C_SLV4_ADDR, AK8963_ADDRESS);
+	//  Select which register is being updated
+	mpu9250_write(client,  I2C_SLV4_REG, AK8963_CNTL);
+	// Set value to write into the register:
+	//      16-bit continuous measurements @ 100Hz
+	mpu9250_write(client,  I2C_SLV4_DO, Mscale << 4 | Mmode);
+	// Trigger write data to slave device 4 -> AK8963
+	mpu9250_write(client,  I2C_SLV4_CTRL, 0x80);
+	msleep(5);
+
+	ret = 0;
+
+	return ret;
+}
+
+/**
+ * Read raw accelerometer data into a provided buffer
+ * @param destination Buffer to save x, y, z acceleration data (min. size = 3)
+ */
+static void readAccelData(int16_t * destination)
+{
+	u8 rawData[6];  // x/y/z accel register data stored here
+	// Read the six raw data registers into data array
+	mpu9250_read_range(slaveDevice, ACCEL_XOUT_H, &rawData[0], 6);
+
+	// Turn the MSB and LSB into a signed 16-bit value
+	destination[0] = ((int16_t)rawData[0] << 8) | rawData[1] ;
+	destination[1] = ((int16_t)rawData[2] << 8) | rawData[3] ;
+	destination[2] = ((int16_t)rawData[4] << 8) | rawData[5] ;
+}
+
+/**
+ * Read raw gyroscope data into a provided buffer
+ * @param destination Buffer to save x, y, z gyroscope data (min. size = 3)
+ */
+static void readGyroData(int16_t * destination)
+{
+	u8 rawData[6];  // x/y/z gyro register data stored here
+	// Read the six raw data registers sequentially into data array
+	mpu9250_read_range(slaveDevice, GYRO_XOUT_H, &rawData[0], 6);
+
+	// Turn the MSB and LSB into a signed 16-bit value
+	destination[0] = ((int16_t)rawData[0] << 8) | rawData[1] ;
+	destination[1] = ((int16_t)rawData[2] << 8) | rawData[3] ;
+	destination[2] = ((int16_t)rawData[4] << 8) | rawData[5] ;
+}
+
+/**
+ * Read raw magnetometer data into a provided buffer
+ * @param destination Buffer to save x, y, z magnetometer data (min. size = 3)
+ */
+static void readMagData(int16_t * destination)
+{
+	// x,y,z gyro register data, ST2 register stored here, must read ST2 at end
+	// of data acquisition
+	u8 rawData[7];
+	u8 c;
+
+	//  TODO: In case it's necessary to always have new data when calling this
+	//  function, implement hanging function which reads Status1 register and
+	//  checks for DRDY bit -> I noticed it doesn't always work (i.e. new data
+	//  is available but bit is 0)
+
+	//  Stop any ongoing I2C0 operations
+	mpu9250_write(slaveDevice,  I2C_SLV0_CTRL, 0x00);
+	// Set to read from slave address of AK8963
+	mpu9250_write(slaveDevice,  I2C_SLV0_ADDR, AK8963_ADDRESS | 0x80);
+
+	// Start reading from X_out, 7 bytes. This will read 6 data registers and
+	//  one status register which will tell whether there was an overflow
+	//  in measurements
+	mpu9250_write(slaveDevice,  I2C_SLV0_REG, AK8963_XOUT_L);
+	// Read 7 bytes from I2C slave 0
+	mpu9250_write(slaveDevice,  I2C_SLV0_CTRL, 0x87);
+	// Move 7 registers from MPU reg to here
+	mpu9250_read_range(slaveDevice, EXT_SENS_DATA_00, rawData, 7);
+
+	c = 0 & rawData[6]; // End data read by reading ST2 register
+	// Check if magnetic sensor overflow is set, if not then report data
+	if (!(c & 0x08)){
+		// Turn the MSB and LSB into a signed 16-bit value
+		destination[0] = ((int16_t)rawData[1] << 8) | rawData[0];
+		// Data stored as little Endian
+		destination[1] = ((int16_t)rawData[3] << 8) | rawData[2];
+		destination[2] = ((int16_t)rawData[5] << 8) | rawData[4];
+	}
+}
+
+/**
+ * Read data from internal temperature sensor
+ * @return Temperature data
+ */
+static int16_t readTempData(void)
+{
+	u8 rawData[2]; // x/y/z gyro register data stored here
+	// Read the two raw data registers sequentially into data array
+	mpu9250_read_range(slaveDevice, TEMP_OUT_H, &rawData[0], 2);
+	// Turn the MSB and LSB into a 16-bit value
+	return ((int16_t)rawData[0] << 8) | rawData[1];
 }
 
 /**********************************************************************

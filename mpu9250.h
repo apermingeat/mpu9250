@@ -189,4 +189,6 @@
 
 #define MESG_MAX_MSG_SIZE	24
 
+
+
 #endif /* MPU9250_H*/
