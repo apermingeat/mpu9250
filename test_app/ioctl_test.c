@@ -6,7 +6,7 @@ int main(void)  {
 	/* Para que esta aplicacion funcione hay que ejecutar el comando
 	 *  "mknod /dev/mi_dispositivo c 202 0" para crear /dev/mi_dispositivo */
 	
-	int my_dev = open("/dev/mi_dispositivo", 0);
+	int my_dev = open("/dev/mi_dispositivo", O_RDONLY);
 	if (my_dev < 0) {
 		perror("Fail to open device file: /dev/mi_dispositivo.");
 	} else {
