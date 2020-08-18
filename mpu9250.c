@@ -6,12 +6,18 @@
 
 #include <linux/i2c.h>
 #include <linux/regmap.h>
+#include "mpu9250.h"
 
 /*Se define un major number arbitrario (estoy inventando) */
 #define MY_MAJOR_NUM 202
 
 /* Definicion de estructura cdev que representa internamente un chardevice  */
 static struct cdev my_dev;
+
+/* Puntero a estructura que representa un dispositivo esclavo
+ * conectado al bus*/
+
+static struct i2c_client *slaveDevice;
 
 /*********************************************************************************
  * Definiciones de funciones sobre archivos y estructura correspondiente
@@ -43,7 +49,82 @@ static const struct file_operations my_dev_fops = {
 };
 
 /*----------------------------------------------------------------------*/
+/**********************************************************************
+ *  Driver MPU9250 - Low level
+ **********************************************************************/
+static int mpu9250_write_range(struct i2c_client *client, u8 addr, u8 *p, int cnt)
+{
+	struct i2c_msg msg;
+	int ret;
 
+	u8 buf[MESG_MAX_MSG_SIZE + 3];
+
+	buf[0] = addr;
+	memcpy(buf + 1, p, cnt);
+
+	msg.addr = client->addr;
+	msg.flags = 0;
+	msg.len = cnt + 1;
+	msg.buf = buf;
+
+	ret = i2c_transfer(client->adapter, &msg, 1);
+	if (ret < 0)
+		pr_info("MPU9250 Error %d writing to register 0x%x\n", ret, addr);
+	return ret < 0 ? ret : 0;
+}
+
+static void mpu9250_write(struct i2c_client *client, u8 addr, u8 val)
+{
+	mpu9250_write_range(client, addr, &val, 1);
+}
+
+static int mpu9250_read_range(struct i2c_client *client, u8 addr, u8 *p, int cnt)
+{
+	struct i2c_msg msg[2];
+	int ret;
+
+	msg[0].addr = client->addr;
+	msg[0].flags = 0;
+	msg[0].len = 1;
+	msg[0].buf = &addr;
+	msg[1].addr = client->addr;
+	msg[1].flags = I2C_M_RD;
+	msg[1].len = cnt;
+	msg[1].buf = p;
+
+	ret = i2c_transfer(client->adapter, msg, 2);
+	if (ret < 0)
+		pr_info("MPU9250 Error %d reading from register 0x%x\n", ret, addr);
+
+	return ret;
+}
+
+static u8 mpu9250_read(struct i2c_client *client, u8 addr)
+{
+	int ret;
+	u8 val;
+
+	ret = mpu9250_read_range(client, addr, &val, 1);
+	if (ret < 0)
+		val = 0;
+
+	return val;
+}
+
+/**********************************************************************
+ *  Driver MPU9250 - high level
+ **********************************************************************/
+
+static int mpu9250_isAlive(struct i2c_client *client)
+{
+	int ret = -1;
+
+	if (WHO_AM_I_RESPONSE == mpu9250_read(client, WHO_AM_I))
+		ret = 0;
+
+	return ret;
+	
+}
 
 /**********************************************************************
  *  Sección de acceso a MPU9250 mediante I2C
@@ -95,6 +176,28 @@ static int mpu9250_i2c_probe(struct i2c_client *client,
 		pr_info("Unable to add cdev\n");
 		return ret;
 	}
+
+	pr_info("Informacion de dispositivo conectado (struct i2c_client):\n");
+
+	pr_info("\tDireccion: %#x\n",client->addr);
+	pr_info("\tNombre: %s\n",client->name);
+
+	pr_info("\tDriver: %s\n",(client->dev).driver->name);
+
+	slaveDevice = client;	//guardamos este puntero para el uso de read y write
+
+	pr_info("Checking device...\n");
+		
+	ret = mpu9250_isAlive(client);
+
+	if (ret < 0){
+		unregister_chrdev_region(dev, 1);
+		pr_info("MPU9250 not response.\n");
+		return ret;
+	}
+
+	pr_info("\tMPU9250 is alive\n");
+	
 	return(0);
 }
 
