@@ -487,7 +487,7 @@ static int mpu9250_i2c_probe(struct i2c_client *client,
 
 static int mpu9250_i2c_remove(struct i2c_client *client)
 {
-	pr_info("Fin del mundo\n");
+	pr_info("MPU9250 unloaded\n");
 	cdev_del(&my_dev);
 	unregister_chrdev_region(MKDEV(MY_MAJOR_NUM, 0), 1);
 	return(0);
@@ -535,5 +535,5 @@ module_i2c_driver(mpu9250_i2c_driver);
  **********************************************************************/
 MODULE_AUTHOR("Alejandro Permingeat <apermingeat@gmail.com>");
 MODULE_LICENSE("GPL");
-MODULE_DESCRIPTION("Este modulo interactua con el system call ioctl");
+MODULE_DESCRIPTION("Este modulo interactua con la IMPU MPU9250");
 MODULE_INFO(mse_imd, "Esto no es para simples mortales");
